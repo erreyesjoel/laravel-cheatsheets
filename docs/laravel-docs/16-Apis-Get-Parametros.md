@@ -2,6 +2,8 @@
 - Api get con parametros
 - Ejemplo con tareas del usuario
 - No será la url pasando el id de la tarea, porque eso seria inseguro en este caso, pq cualquiera podría acceder a cualquier tarea de cualquier usuario
+- El usuario se autentica, y mediante el token, obtenemos el user_id, y devolvemos solo sus tareas
+
 1. TaskController.php
 - Buscamos el usuario autenticado desde el token
 - Obtener solo sus tareas
