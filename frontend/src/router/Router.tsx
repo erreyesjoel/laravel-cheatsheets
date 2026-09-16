@@ -3,6 +3,7 @@ import Auth from "../pages/Auth/Auth";
 import Dashboard from "../pages/Dashboard/Dashboard";
 import PrivateRoute from "./PrivateRoute";
 import Header from "../components/Header/Header";
+import Tasks from "../pages/Tasks/Tasks";
 
 const AppRouter = () => {
     return (
@@ -25,6 +26,18 @@ const AppRouter = () => {
                         <Header />
                         <PrivateRoute>
                             <Dashboard />
+                        </PrivateRoute>
+                    </>
+                }
+            />
+
+            <Route
+                path="/tasks"
+                element={
+                    <>
+                        <Header />
+                        <PrivateRoute>
+                            <Tasks />
                         </PrivateRoute>
                     </>
                 }

@@ -58,3 +58,28 @@ Cuando llamas a una función async (como `UserService.getUser()`), esta retorna 
     console.log(user);
     // Consola: { id: 1, email: "..." } -> "El usuario real ya descargado"
     ```
+# Ejemplo mas completo
+```tsx
+import { useEffect } from "react";
+import { tasksService } from "../../api/services/tasks.service";
+
+const Tasks = () => {
+    useEffect(() => {
+        const tasksFetch = async () => {
+            try {
+                const tasks = await tasksService.getTasks();
+                console.log("Tareas usuario", tasks);
+            } catch (error) {
+                console.log(error);
+            }
+        }
+        tasksFetch();
+    }, []);
+
+    return (
+        <h1>Tareas usuario</h1>
+    );
+}
+
+export default Tasks
+```

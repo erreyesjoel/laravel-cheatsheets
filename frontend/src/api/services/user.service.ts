@@ -1,12 +1,10 @@
-import { API_URL } from "../../environment-variables/environments";
+import { api } from "../api";
 
 // metodo para obtener el usuario autenticado
 export const UserService = {
     getUser: async () => {
-        const res = await fetch(`${API_URL}/user`, {
-            method: "GET",
+        return await api.get("/user", {
             credentials: "include",
         });
-        return res.json();
     },
 };

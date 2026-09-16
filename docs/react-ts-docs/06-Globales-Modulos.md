@@ -147,3 +147,21 @@ Por eso camelCase es la convención recomendada para módulos SCSS.
 
 En resumen:  
 Usamos `authContainer` porque los módulos SCSS se convierten en un objeto JS, y las propiedades de un objeto no pueden tener guiones. CamelCase es la forma correcta y profesional de nombrar clases en módulos SCSS.
+
+# Resumen: ¿Cuándo usar Global vs Módulo?
+
+La principal razón es mantener el código organizado y **evitar conflictos de nombres** (que una clase CSS rompa el diseño de otro componente por error).
+
+## 1. Cuándo usar `Modules` (`*.module.scss`)
+Úsalo **SIEMPRE** para componentes específicos (ej. `Auth`, `Header`, `Button`).
+
+- **Evita colisiones:** Al usar módulos, React transforma tus clases a nombres únicos (ej: `.card` se convierte en `Auth_card__Xy2z`). Esto permite que puedas tener una clase `.card` en el Login y otra `.card` totalmente distinta en el Dashboard sin que se peleen.
+- **Encapsulamiento:** El estilo "muere" en ese componente. Si borras `Auth.tsx`, puedes borrar `Auth.module.scss` con la seguridad de que no romperás nada más en la web.
+- **Mantenimiento:** Sabes exactamente dónde está el estilo de ese botón específico.
+
+## 2. Cuándo usar `Main` o Globales (`_main.scss`, `global.scss`)
+Úsalo **SOLO** para lo que afecta a toda la aplicación por igual.
+
+- **Variables y Mixins:** Definir colores (`$primary-color`), tamaños de fuente o variables que usarás en todos lados.
+- **Resets y Base:** Quitar los márgenes por defecto del navegador, definir la fuente tipográfica (`font-family`) en el `body`, o el color de fondo general.
+- **Librerías externas:** A veces necesitas sobrescribir estilos de una librería (como Bootstrap o Material UI) que requieren clases globales.
