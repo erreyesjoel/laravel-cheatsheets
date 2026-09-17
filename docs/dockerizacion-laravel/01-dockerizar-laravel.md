@@ -1,9 +1,8 @@
+# 🐳 Cheatsheet · Dockerizar Laravel 13 + Nginx (PHP 8.4)
 
-# 🐳 Cheatsheet · Dockerizar Laravel 13 (PHP 8.4)
-
-> Primera fase de la dockerización: Laravel 13 + PHP 8.4.
-> En este punto **todavía no usamos Nginx ni MySQL**; únicamente dejamos
-> Laravel funcionando dentro de un contenedor Docker.
+> Primera fase de la dockerización de **Kasa Sofá**.
+>
+> Objetivo: ejecutar **Laravel 13** completamente dentro de Docker utilizando **PHP 8.4-FPM** y **Nginx**, con una arquitectura prácticamente igual a producción.
 
 ---
 
@@ -11,40 +10,80 @@
 
 Pasar de esto:
 
+```text
 Ubuntu
 ├── PHP
 ├── Composer
 └── Laravel
+```
 
 A esto:
 
+```text
 Ubuntu
 ├── Docker
 ├── Git
 └── VS Code
 
-Docker
-└── app
-    ├── PHP 8.4
-    ├── Composer
-    └── Laravel 13
+Docker Compose
+├── app
+│   ├── PHP 8.4
+│   ├── Composer
+│   └── Laravel 13
+│
+└── nginx
+    └── Servidor Web
+```
 
-El sistema operativo únicamente edita archivos.
-Docker es quien ejecuta Laravel.
+**Idea principal:**
+
+- Ubuntu únicamente edita archivos.
+- Docker ejecuta toda la aplicación.
+- Nginx recibe las peticiones HTTP.
+- PHP-FPM ejecuta Laravel.
+
+---
+
+# Arquitectura
+
+```text
+Navegador
+     │
+     ▼
+localhost:8086
+     │
+     ▼
+┌───────────┐
+│   Nginx   │
+│ Puerto 80 │
+└─────┬─────┘
+      │ FastCGI
+      ▼
+┌───────────────┐
+│ Laravel 13    │
+│ PHP 8.4-FPM   │
+│ Composer      │
+└───────────────┘
+```
 
 ---
 
 # Estructura del proyecto
 
+```text
 kasa-sofa/
 ├── docker/
 │   ├── nginx/
+│   │   └── default.conf
+│   │
 │   └── php/
-│       └── Dockerfile
+│       ├── Dockerfile
+│       └── entrypoint.sh
 │
 ├── src/                  # Laravel 13
 ├── docker-compose.yml
 └── README.md
+```
 
 ---
 
@@ -52,12 +91,17 @@ kasa-sofa/
 
 Ruta:
 
+```text
 docker/php/Dockerfile
+```
 
 ```dockerfile
 FROM php:8.4-fpm
 
-# Dependencias necesarias para Laravel
+# =====================================================
+# DEPENDENCIAS DEL SISTEMA
+# =====================================================
+
 RUN apt-get update && apt-get install -y \
     git \
     unzip \
@@ -74,41 +118,71 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Instalar Composer desde la imagen oficial
+# =====================================================
+# COMPOSER
+# =====================================================
+
+# Copiamos Composer desde la imagen oficial
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 # Carpeta donde vivirá Laravel dentro del contenedor
 WORKDIR /var/www
+
+# =====================================================
+# ENTRYPOINT
+# =====================================================
+
+# Script que se ejecutará cada vez que arranque el contenedor
+COPY docker/php/entrypoint.sh /usr/local/bin/entrypoint.sh
+
+# Permisos de ejecución
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Preparación del entorno
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+# Proceso principal del contenedor
+CMD ["php-fpm"]
 ```
 
-## ¿Qué hace cada línea?
+---
 
-### FROM php:8.4-fpm
+# ¿Qué hace cada parte?
 
-Utiliza la imagen oficial de PHP 8.4 preparada para trabajar con **PHP-FPM**.
+## FROM php:8.4-fpm
+
+Utiliza la imagen oficial de PHP preparada para trabajar con **PHP-FPM**.
+
+¿Por qué FPM?
 
 - No incluye Apache.
-- Está pensada para usarse junto a Nginx.
-- Será exactamente la misma base que utilizaremos en producción.
+- Está diseñada para comunicarse con Nginx.
+- Es la arquitectura más habitual en Laravel moderno.
 
-### docker-php-ext-install
+---
 
-Instala las extensiones que Laravel necesita:
+## docker-php-ext-install
+
+Instala las extensiones que Laravel necesita.
 
 | Extensión | Función |
-|-----------|---------|
+|-----------|----------|
 | pdo_mysql | Conexión con MySQL |
-| mbstring | Cadenas UTF-8 |
+| mbstring | Texto UTF-8 |
 | intl | Internacionalización |
-| zip | Archivos ZIP |
+| zip | Compresión ZIP |
 
-### Composer
+---
+
+## Composer
 
 ```dockerfile
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 ```
 
-En lugar de instalar Composer manualmente, lo copiamos desde la imagen oficial.
+No instalamos Composer manualmente.
+
+Simplemente lo copiamos desde la imagen oficial.
 
 Resultado:
 
@@ -116,46 +190,130 @@ Resultado:
 composer --version
 ```
 
-funcionará dentro del contenedor.
+funciona dentro del contenedor.
 
-### WORKDIR
+---
+
+## WORKDIR
 
 ```dockerfile
 WORKDIR /var/www
 ```
 
-Equivale a hacer:
+Equivale a:
 
 ```bash
 cd /var/www
 ```
 
-Todos los comandos (`php artisan`, `composer`, etc.) se ejecutarán desde esa carpeta.
+Todos los comandos (`artisan`, `composer`, etc.) parten desde esa carpeta.
 
 ---
 
-# Paso 2 · docker-compose.yml
+# Paso 2 · ENTRYPOINT
 
-Ubicación:
+Ruta:
 
+```text
+docker/php/entrypoint.sh
+```
+
+```bash
+#!/bin/sh
+set -e
+
+# Permisos necesarios para Laravel
+chown -R www-data:www-data \
+    /var/www/storage \
+    /var/www/bootstrap/cache \
+    /var/www/database
+
+chmod -R 775 \
+    /var/www/storage \
+    /var/www/bootstrap/cache \
+    /var/www/database
+
+# Ejecuta el proceso principal (php-fpm)
+exec "$@"
+```
+
+---
+
+## ¿Por qué usamos ENTRYPOINT?
+
+Cuando montamos la carpeta `src` como volumen:
+
+```yaml
+volumes:
+  - ./src:/var/www
+```
+
+Los permisos del ordenador sustituyen a los de la imagen Docker.
+
+Por eso un simple:
+
+```dockerfile
+RUN chown ...
+```
+
+**no sirve**.
+
+Necesitamos ejecutar los permisos **cada vez que arranca el contenedor**.
+
+---
+
+## ENTRYPOINT vs CMD
+
+| ENTRYPOINT | CMD |
+|------------|-----|
+| Se ejecuta siempre | Proceso principal |
+| Corrige permisos | Inicia PHP-FPM |
+| Prepara el entorno | Mantiene el contenedor vivo |
+
+Orden real de ejecución:
+
+```text
+ENTRYPOINT
+      │
+      ▼
+Permisos Laravel
+      │
+      ▼
+CMD
+      │
+      ▼
+PHP-FPM
+```
+
+---
+
+# Paso 3 · docker-compose.yml
+
+Ruta:
+
+```text
 docker-compose.yml
+```
 
 ```yaml
 services:
 
-  # Servicio principal de Laravel
+  # =====================================================
+  # SERVICIO PRINCIPAL · LARAVEL 13
+  # =====================================================
   app:
 
     # Construcción de la imagen personalizada
     build:
 
-      # Raíz del proyecto
+      # Contexto de compilación.
+      # "." = raíz del proyecto
       context: .
 
-      # Dockerfile utilizado para construir la imagen
+      # Ruta del Dockerfile
       dockerfile: docker/php/Dockerfile
 
-    # Nombre del contenedor
+    # Nombre fijo del contenedor
     container_name: kasa_sofa_app
 
     # Directorio de trabajo
@@ -163,7 +321,37 @@ services:
 
     # Sincronización entre el PC y Docker
     volumes:
+
+      # Carpeta local        Carpeta del contenedor
       - ./src:/var/www
+
+
+  # =====================================================
+  # SERVIDOR WEB · NGINX
+  # =====================================================
+  nginx:
+
+    # Imagen oficial de Nginx
+    image: nginx:stable-alpine
+
+    # Nombre del contenedor
+    container_name: kasa_sofa_nginx
+
+    # Puerto del PC : Puerto del contenedor
+    ports:
+      - "8086:80"
+
+    volumes:
+
+      # Comparte el proyecto Laravel
+      - ./src:/var/www
+
+      # Configuración personalizada
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+
+    # Primero debe arrancar Laravel
+    depends_on:
+      - app
 ```
 
 ---
@@ -172,18 +360,18 @@ services:
 
 ## services
 
-Cada servicio es un contenedor independiente.
+Cada servicio representa **un contenedor independiente**.
 
-Actualmente solo existe uno:
+Actualmente tenemos dos:
 
 ```yaml
 services:
   app:
+  nginx:
 ```
 
 Más adelante añadiremos:
 
-- nginx
 - mysql
 - node
 
@@ -191,19 +379,23 @@ Más adelante añadiremos:
 
 ## build
 
-Construye una imagen personalizada utilizando el Dockerfile.
+Construye una imagen personalizada.
 
+```text
 Dockerfile
-↓
+      │
+      ▼
 Imagen Docker
-↓
+      │
+      ▼
 Contenedor
+```
 
 **Dockerfile** = receta
 
 **Imagen** = resultado
 
-**Contenedor** = instancia en ejecución
+**Contenedor** = instancia ejecutándose.
 
 ---
 
@@ -213,7 +405,7 @@ Contenedor
 context: .
 ```
 
-El punto (`.`) significa:
+El punto significa:
 
 > La raíz del proyecto es el contexto de compilación.
 
@@ -223,7 +415,7 @@ Docker puede acceder a:
 - docker/
 - README.md
 
-Si el contexto fuera `./docker`, no podría ver la carpeta `src`.
+Si el contexto fuese `./docker`, no podría copiar el proyecto Laravel.
 
 ---
 
@@ -233,9 +425,9 @@ Si el contexto fuera `./docker`, no podría ver la carpeta `src`.
 dockerfile: docker/php/Dockerfile
 ```
 
-Le indica a Docker dónde está la receta.
+Le indica a Docker dónde está exactamente la receta.
 
-Evitamos tener el Dockerfile en la raíz y mantenemos toda la infraestructura agrupada en la carpeta `docker/`.
+Mantenemos toda la infraestructura agrupada dentro de `docker/`.
 
 ---
 
@@ -245,17 +437,16 @@ Evitamos tener el Dockerfile en la raíz y mantenemos toda la infraestructura ag
 working_dir: /var/www
 ```
 
-Cuando entres al contenedor ya estarás aquí:
+Cuando entramos al contenedor:
+
+```bash
+docker compose exec app bash
+```
+
+ya estaremos aquí:
 
 ```text
 /var/www
-```
-
-Por eso puedes ejecutar directamente:
-
-```bash
-php artisan migrate
-composer install
 ```
 
 ---
@@ -267,66 +458,176 @@ volumes:
   - ./src:/var/www
 ```
 
-Es la sincronización entre el ordenador y Docker.
+Sincroniza los archivos entre Ubuntu y Docker.
 
-PC                         Docker
+```text
+PC                    Docker
 
-./src  ───────────────▶  /var/www
+./src  ─────────▶  /var/www
+```
 
-Si modificas un archivo en VS Code:
+Si editas un Blade:
 
 ```text
 src/resources/views/home.blade.php
 ```
 
-aparece instantáneamente dentro del contenedor en:
+aparece instantáneamente dentro del contenedor.
+
+No hay que copiar archivos.
+
+---
+
+## ports
+
+```yaml
+ports:
+  - "8086:80"
+```
+
+Significa:
+
+| PC | Contenedor |
+|-----|------------|
+| 8086 | 80 |
+
+Cuando abrimos:
 
 ```text
-/var/www/resources/views/home.blade.php
+http://localhost:8086
 ```
 
-No hay que copiar archivos manualmente.
+Docker redirige la petición al puerto **80** de Nginx.
+
+Elegimos **8086** porque el puerto **80** ya estaba ocupado por Apache.
 
 ---
 
-# Paso 3 · Construir la imagen
+## depends_on
 
-Desde la raíz del proyecto:
-
-```bash
-docker compose build
+```yaml
+depends_on:
+  - app
 ```
 
-Este comando:
+Ordena el arranque:
 
-1. Lee el Dockerfile.
-2. Instala PHP 8.4.
-3. Instala Composer.
-4. Instala las extensiones.
-5. Crea la imagen `kasa-sofa-app`.
+1. Laravel
+2. Nginx
+
+No crea la conexión de red; Docker Compose ya crea una red interna automáticamente.
 
 ---
 
-# Paso 4 · Entrar al contenedor
+# Paso 4 · Configuración de Nginx
 
-```bash
-docker compose run --rm app bash
+Ruta:
+
+```text
+docker/nginx/default.conf
 ```
 
-Explicación:
+```nginx
+server {
 
-| Opción | Significado |
-|---------|------------|
-| run | Crea un contenedor temporal |
-| --rm | Lo elimina al salir |
-| app | Servicio definido en compose |
-| bash | Abre una terminal |
+    # Puerto HTTP donde Nginx escuchará las peticiones
+    listen 80;
+
+    # Dominio del servidor (desarrollo)
+    server_name localhost;
+
+    # Carpeta pública de Laravel
+    root /var/www/public;
+
+    # Archivo inicial
+    index index.php index.html;
+
+
+    # =====================================================
+    # RUTAS DE LARAVEL
+    # =====================================================
+    location / {
+
+        # Si el archivo existe, lo sirve.
+        # Si no existe, Laravel gestionará la ruta.
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+
+
+    # =====================================================
+    # ARCHIVOS PHP
+    # =====================================================
+    location ~ \.php$ {
+
+        # Contenedor Laravel (PHP-FPM)
+        fastcgi_pass app:9000;
+
+        fastcgi_index index.php;
+
+        include fastcgi_params;
+
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+    }
+
+
+    # =====================================================
+    # SEGURIDAD
+    # =====================================================
+    location ~ /\.(?!well-known).* {
+
+        # Bloquea archivos ocultos
+        deny all;
+    }
+}
+```
+
+---
+
+# ¿Qué hace `try_files`?
+
+Es la línea más importante de Nginx.
+
+```nginx
+try_files $uri $uri/ /index.php?$query_string;
+```
+
+Ejemplos:
+
+| URL | ¿Existe? | Resultado |
+|------|----------|-----------|
+| /css/app.css | ✅ | Nginx sirve el archivo |
+| /catalogo | ❌ | Laravel responde |
+| /contacto | ❌ | Laravel responde |
+
+Gracias a esto funcionan todas las rutas de Laravel.
+
+---
+
+# Paso 5 · Construir y levantar
+
+Reconstruimos la imagen:
+
+```bash
+docker compose up --build -d
+```
+
+Comprobar contenedores:
+
+```bash
+docker compose ps
+```
+
+Entrar al contenedor:
+
+```bash
+docker compose exec app bash
+```
 
 ---
 
 # Verificaciones
 
-Dentro del contenedor:
+## PHP
 
 ```bash
 php -v
@@ -340,6 +641,8 @@ PHP 8.4.x
 
 ---
 
+## Composer
+
 ```bash
 composer --version
 ```
@@ -347,6 +650,8 @@ composer --version
 Debe mostrar Composer 2.x.
 
 ---
+
+## Laravel
 
 ```bash
 php artisan --version
@@ -358,20 +663,42 @@ Debe mostrar Laravel 13.x.
 
 # ¿Qué hemos conseguido?
 
-✔ Laravel ya no depende del PHP del sistema operativo.
-
-✔ Composer vive dentro de Docker.
-
-✔ El código sigue estando en `src/`, editable desde VS Code.
-
-✔ El entorno es reproducible en cualquier ordenador con Docker.
+- [x] Laravel 13 dockerizado
+- [x] PHP 8.4 dentro de Docker
+- [x] Composer dentro de Docker
+- [x] Nginx como servidor web
+- [x] Permisos automáticos mediante ENTRYPOINT
+- [x] Acceso desde `http://localhost:8086`
+- [ ] MySQL 8.4
+- [ ] Node + TypeScript
+- [ ] Vite dockerizado
 
 ---
 
-# Próxima fase
+# Estado actual del proyecto
 
-- [x] Dockerizar Laravel
-- [ ] Añadir Nginx
-- [ ] Añadir MySQL
-- [ ] Añadir Node + TypeScript
-- [ ] Acceder mediante http://localhost
+```text
+Ubuntu
+├── Docker
+├── Git
+└── VS Code
+
+Docker Compose
+│
+├── app
+│   ├── PHP 8.4
+│   ├── Composer
+│   ├── Laravel 13
+│   └── PHP-FPM
+│
+└── nginx
+    ├── Puerto 80
+    └── Servidor Web
+
+Navegador
+      │
+      ▼
+http://localhost:8086
+```
+
+**Resultado:** Laravel ya funciona con una arquitectura muy similar a producción, donde Nginx actúa como servidor web y PHP-FPM ejecuta la aplicación.
