@@ -1082,6 +1082,332 @@ Además, será exactamente la misma tecnología que utilizaremos en producción.
 
 ---
 
+# Paso 6.5 · Separar las variables de entorno (2 archivos `.env`)
+
+Hasta ahora las credenciales de MySQL estaban escritas directamente en `docker-compose.yml`.
+
+Eso funciona, pero no es una buena práctica: si subes el repositorio a GitHub, las contraseñas quedan expuestas.
+
+La solución es utilizar **dos archivos `.env`**, cada uno con una responsabilidad distinta.
+
+---
+
+# ¿Por qué dos `.env`?
+
+Porque **Docker Compose y Laravel son dos aplicaciones diferentes**.
+
+```text
+kasa-sofa/
+│
+├── .env                 ← Docker Compose
+├── .env.example
+│
+├── docker-compose.yml
+│
+└── src/
+    ├── .env             ← Laravel
+    ├── .env.example
+    └── artisan
+```
+
+| Archivo | Lo utiliza | Función |
+|----------|------------|----------|
+| `.env` (raíz) | Docker Compose | Crear MySQL y los contenedores |
+| `.env.example` (raíz) | Git | Plantilla para otros desarrolladores |
+| `src/.env` | Laravel | Conectarse a MySQL |
+| `src/.env.example` | Git | Plantilla de configuración de Laravel |
+
+> **Importante:** Docker nunca lee `src/.env`, y Laravel nunca lee el `.env` de la raíz. Son totalmente independientes.
+
+---
+
+# Paso 6.5.1 · Crear el `.env` de Docker
+
+Ruta:
+
+```text
+kasa-sofa/.env
+```
+
+Contenido:
+
+```env
+# =====================================================
+# MYSQL · DOCKER COMPOSE
+# =====================================================
+
+MYSQL_DATABASE=kasa_sofa
+MYSQL_USER=joel
+MYSQL_PASSWORD=1234
+MYSQL_ROOT_PASSWORD=root
+```
+
+Este archivo **no se sube a Git**.
+
+Su única función es proporcionar las variables que Docker Compose utilizará para crear automáticamente la base de datos y el usuario de MySQL.
+
+---
+
+# Paso 6.5.2 · Crear `.env.example`
+
+Ruta:
+
+```text
+kasa-sofa/.env.example
+```
+
+Contenido:
+
+```env
+# =====================================================
+# MYSQL · DOCKER COMPOSE
+# =====================================================
+
+MYSQL_DATABASE=your_database
+MYSQL_USER=your_user
+MYSQL_PASSWORD=your_password
+MYSQL_ROOT_PASSWORD=your_root_password
+```
+
+Este archivo sí se versiona.
+
+Cuando otra persona clone el proyecto únicamente tendrá que hacer:
+
+```bash
+cp .env.example .env
+```
+
+y rellenar sus propias credenciales.
+
+---
+
+# Paso 6.5.3 · Ignorar el `.env` real
+
+Archivo:
+
+```text
+kasa-sofa/.gitignore
+```
+
+Contenido:
+
+```gitignore
+# Variables de entorno de Docker Compose
+.env
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
+```
+
+Así evitamos subir credenciales reales al repositorio.
+
+---
+
+# Paso 6.5.4 · Modificar `docker-compose.yml`
+
+Antes escribíamos las credenciales directamente:
+
+```yaml
+environment:
+  MYSQL_DATABASE: kasa_sofa
+  MYSQL_USER: joel
+  MYSQL_PASSWORD: 1234
+  MYSQL_ROOT_PASSWORD: root
+```
+
+Ahora Docker Compose las obtiene automáticamente del `.env` de la raíz:
+
+```yaml
+db:
+
+  image: mysql:8.4
+
+  container_name: kasa_sofa_mysql
+
+  restart: unless-stopped
+
+  environment:
+
+    MYSQL_DATABASE: ${MYSQL_DATABASE}
+    MYSQL_USER: ${MYSQL_USER}
+    MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+
+  volumes:
+    - mysql_data:/var/lib/mysql
+
+  ports:
+    - "3311:3306"
+
+  expose:
+    - "3306"
+```
+
+## ¿Qué significa `${VARIABLE}`?
+
+Docker Compose sustituye automáticamente cada variable por su valor del archivo `.env`.
+
+```text
+.env (raíz)
+│
+├── MYSQL_USER=joel
+├── MYSQL_PASSWORD=1234
+└── MYSQL_DATABASE=kasa_sofa
+        │
+        ▼
+docker-compose.yml
+        │
+        ▼
+Contenedor MySQL
+```
+
+De esta forma el YAML nunca contiene credenciales reales.
+
+---
+
+# Paso 6.5.5 · Configurar Laravel
+
+Laravel necesita **sus propias** variables para conectarse a MySQL.
+
+Ruta:
+
+```text
+src/.env
+```
+
+Contenido:
+
+```env
+# =====================================================
+# BASE DE DATOS · MYSQL
+# =====================================================
+
+DB_CONNECTION=mysql
+
+# Nombre del servicio Docker
+DB_HOST=db
+
+# Puerto interno del contenedor
+DB_PORT=3306
+
+DB_DATABASE=kasa_sofa
+DB_USERNAME=joel
+DB_PASSWORD=1234
+```
+
+## ¿Por qué `DB_HOST=db`?
+
+Porque `db` es el nombre del servicio definido en Docker Compose.
+
+```yaml
+services:
+
+  db:
+    image: mysql:8.4
+```
+
+Docker Compose crea automáticamente una red interna y un DNS.
+
+En lugar de usar `localhost`, Laravel simplemente pregunta por el servicio `db`.
+
+```text
+Laravel (app)
+      │
+      ▼
+DB_HOST=db
+      │
+      ▼
+Contenedor MySQL
+```
+
+---
+
+# Paso 6.5.6 · Verificar que ambos `.env` funcionan
+
+## 1. Reconstruir los contenedores
+
+```bash
+docker compose down
+docker compose up --build -d
+```
+
+---
+
+## 2. Comprobar que Docker lee el `.env` de la raíz
+
+```bash
+docker compose exec db env | grep MYSQL
+```
+
+Resultado esperado:
+
+```text
+MYSQL_DATABASE=kasa_sofa
+MYSQL_USER=joel
+MYSQL_PASSWORD=1234
+MYSQL_ROOT_PASSWORD=root
+```
+
+Si aparecen estas variables, Docker Compose ha cargado correctamente el `.env` de la raíz.
+
+---
+
+## 3. Comprobar que Laravel usa `src/.env`
+
+```bash
+docker compose exec app php artisan migrate:status
+```
+
+Resultado esperado:
+
+```text
+Migration name                                Batch / Status
+
+0001_01_01_000000_create_users_table          [1] Ran
+0001_01_01_000001_create_cache_table          [1] Ran
+0001_01_01_000002_create_jobs_table           [1] Ran
+```
+
+Si las migraciones aparecen como **Ran**, significa que Laravel se está conectando correctamente a MySQL utilizando su propio `src/.env`.
+
+---
+
+# Resumen visual
+
+```text
+                 PROYECTO KASA SOFÁ
+
+        ┌──────────────────────────────┐
+        │ .env (raíz)                 │
+        │ Docker Compose              │
+        └──────────────┬──────────────┘
+                       │
+                       ▼
+              docker-compose.yml
+                       │
+                       ▼
+                 Contenedor MySQL
+                       ▲
+                       │
+                DB_HOST=db
+                       │
+        ┌──────────────┴──────────────┐
+        │ src/.env                    │
+        │ Laravel 13                  │
+        └─────────────────────────────┘
+```
+
+---
+
+# ¿Qué hemos conseguido?
+
+- [x] Las credenciales ya no están escritas en `docker-compose.yml`.
+- [x] Docker Compose utiliza su propio `.env` en la raíz.
+- [x] Laravel utiliza su propio `src/.env`.
+- [x] El `.env` real queda fuera del repositorio gracias al `.gitignore`.
+- [x] El proyecto sigue una estructura profesional y preparada para trabajar en equipo.
+
 # Paso 7 · Dockerizar Node 22 + Vite + TypeScript + SCSS
 
 Hasta ahora el backend ya estaba completamente dockerizado:
