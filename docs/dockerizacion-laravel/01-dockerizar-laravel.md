@@ -1079,3 +1079,514 @@ Además, será exactamente la misma tecnología que utilizaremos en producción.
 - [ ] Vite
 - [ ] Panel de administración
 ```
+
+---
+
+# Paso 7 · Dockerizar Node 22 + Vite + TypeScript + SCSS
+
+Hasta ahora el backend ya estaba completamente dockerizado:
+
+- Laravel 13
+- PHP 8.4 FPM
+- Nginx
+- MySQL 8.4
+
+Faltaba el **frontend**. En esta fase añadimos un cuarto servicio: **Node 22**, encargado exclusivamente de Vite, TypeScript y SCSS.
+
+> Node **no ejecuta Laravel**. Su única responsabilidad es compilar y servir los assets del frontend.
+
+---
+
+# Nueva arquitectura
+
+```text
+Navegador
+      │
+      ▼
+localhost:8086
+      │
+      ▼
+Nginx
+      │
+      ▼
+Laravel 13 (PHP-FPM)
+      │
+      ├──────────────► MySQL 8.4
+      │
+      └──────────────► Vite (Node 22)
+                         │
+                         ├── TypeScript
+                         └── SCSS
+```
+
+Cada contenedor tiene una única responsabilidad.
+
+| Servicio | Función |
+|----------|---------|
+| app | Laravel + PHP + Composer |
+| nginx | Servidor web |
+| db | MySQL |
+| node | Vite + npm + TypeScript + SCSS |
+
+---
+
+# Paso 7.1 · Estructura del proyecto
+
+Añadimos una nueva carpeta dentro de `docker/`.
+
+```text
+kasa-sofa/
+├── docker/
+│   ├── nginx/
+│   ├── php/
+│   └── node/
+│       ├── Dockerfile
+│       └── entrypoint.sh
+│
+├── src/
+├── docker-compose.yml
+└── README.md
+```
+
+---
+
+# Paso 7.2 · Dockerfile de Node
+
+Ruta:
+
+`docker/node/Dockerfile`
+
+```dockerfile
+FROM node:22-alpine
+
+# =====================================================
+# CARPETA DEL PROYECTO
+# =====================================================
+
+WORKDIR /var/www
+
+# =====================================================
+# ENTRYPOINT
+# =====================================================
+
+COPY docker/node/entrypoint.sh /usr/local/bin/entrypoint.sh
+
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+# =====================================================
+# PROCESO PRINCIPAL
+# =====================================================
+
+CMD ["npm", "run", "dev", "--", "--host"]
+```
+
+## ¿Qué hace?
+
+### FROM node:22-alpine
+
+Utilizamos la imagen oficial de **Node 22 LTS** en su versión Alpine.
+
+Ventajas:
+
+- Muy ligera.
+- Ideal para desarrollo.
+- Incluye `npm` y `npx`.
+
+---
+
+### WORKDIR
+
+```dockerfile
+WORKDIR /var/www
+```
+
+Node trabajará exactamente sobre la misma carpeta que Laravel.
+
+Esto significa que `package.json`, `resources/` y `vite.config.ts` son compartidos entre ambos contenedores.
+
+---
+
+### ENTRYPOINT
+
+Antes de arrancar Vite ejecutaremos un pequeño script.
+
+Su objetivo es preparar automáticamente el entorno.
+
+---
+
+### CMD
+
+```dockerfile
+CMD ["npm", "run", "dev", "--", "--host"]
+```
+
+Arranca Vite escuchando en todas las interfaces.
+
+Gracias al parámetro `--host`, Vite es accesible desde Docker mediante el puerto **5173**.
+
+---
+
+# Paso 7.3 · entrypoint.sh
+
+Ruta:
+
+`docker/node/entrypoint.sh`
+
+```sh
+#!/bin/sh
+set -e
+
+# =====================================================
+# INSTALAR DEPENDENCIAS
+# =====================================================
+
+# Si node_modules no existe, instala automáticamente
+if [ ! -d "node_modules" ]; then
+    echo "📦 Instalando dependencias de Node..."
+    npm install
+fi
+
+# Ejecuta el proceso principal (Vite)
+exec "$@"
+```
+
+## ¿Por qué usamos ENTRYPOINT?
+
+Igual que en PHP, queremos automatizar la preparación del entorno.
+
+Cuando el contenedor arranca:
+
+```text
+Node inicia
+      │
+      ▼
+¿Existe node_modules?
+      │
+ ┌────┴────┐
+ │         │
+No        Sí
+ │         │
+ ▼         ▼
+npm install
+      │
+      ▼
+Arrancar Vite
+```
+
+De esta forma nunca tenemos que ejecutar `npm install` manualmente la primera vez.
+
+---
+
+# Paso 7.4 · Añadir el servicio Node
+
+Archivo:
+
+`docker-compose.yml`
+
+Añadimos un cuarto servicio.
+
+```yaml
+  # =====================================================
+  # FRONTEND · NODE 22 + VITE
+  # =====================================================
+  node:
+
+    # Construcción de la imagen personalizada
+    build:
+      context: .
+      dockerfile: docker/node/Dockerfile
+
+    # Nombre del contenedor
+    container_name: kasa_sofa_node
+
+    # Carpeta del proyecto
+    working_dir: /var/www
+
+    # Compartimos Laravel completo
+    volumes:
+      - ./src:/var/www
+
+    # Puerto de desarrollo de Vite
+    ports:
+      - "5173:5173"
+
+    # Arranca después de Laravel
+    depends_on:
+      - app
+```
+
+---
+
+# ¿Qué hace cada parte?
+
+## build
+
+Construye nuestra propia imagen de Node utilizando el Dockerfile.
+
+No usamos directamente `node:22-alpine`, sino una imagen personalizada con nuestro ENTRYPOINT.
+
+---
+
+## volumes
+
+```yaml
+volumes:
+  - ./src:/var/www
+```
+
+El mismo código es compartido por:
+
+- Laravel
+- Node
+
+Así, cuando modificamos un `.scss` o un `.ts`, Vite detecta inmediatamente el cambio.
+
+---
+
+## ports
+
+```yaml
+ports:
+  - "5173:5173"
+```
+
+| Equipo | Puerto |
+|---------|--------|
+| Ubuntu | 5173 |
+| Vite | 5173 |
+
+En desarrollo tendremos dos servidores:
+
+| Servicio | URL |
+|----------|-----|
+| Laravel | http://localhost:8086 |
+| Vite | http://localhost:5173 |
+
+Laravel carga automáticamente los assets desde Vite.
+
+---
+
+# Paso 7.5 · Instalar TypeScript y SCSS
+
+Laravel ya incluye Vite, pero queríamos trabajar con **TypeScript** y **SCSS** en lugar de JavaScript y CSS.
+
+Instalamos las dependencias desde el contenedor Node.
+
+```bash
+docker compose exec node npm install -D typescript sass @types/node
+```
+
+## ¿Por qué no lo ponemos en el Dockerfile?
+
+Porque modifica el propio proyecto:
+
+- `package.json`
+- `package-lock.json`
+
+Esas dependencias deben quedar versionadas en Git.
+
+El Dockerfile construye el entorno; el proyecto define sus propias dependencias.
+
+---
+
+# Paso 7.6 · Crear tsconfig.json
+
+Generamos la configuración una única vez.
+
+```bash
+docker compose exec node npx tsc --init
+```
+
+Se crea:
+
+```text
+src/
+├── tsconfig.json
+├── package.json
+└── package-lock.json
+```
+
+> `tsconfig.json` forma parte del proyecto y debe subirse al repositorio.
+
+---
+
+# Paso 7.7 · Migrar Vite a TypeScript
+
+Laravel crea inicialmente:
+
+```text
+vite.config.js
+```
+
+Como el proyecto utilizará TypeScript, lo renombramos:
+
+```bash
+mv src/vite.config.js src/vite.config.ts
+```
+
+Contenido final:
+
+```ts
+import { defineConfig } from 'vite';
+import laravel from 'laravel-vite-plugin';
+import { bunny } from 'laravel-vite-plugin/fonts';
+
+export default defineConfig({
+    plugins: [
+        laravel({
+            input: [
+                'resources/scss/app.scss',
+                'resources/ts/app.ts',
+            ],
+            refresh: true,
+            fonts: [
+                bunny('Instrument Sans', {
+                    weights: [400, 500, 600],
+                }),
+            ],
+        }),
+    ],
+
+    server: {
+        watch: {
+            ignored: ['**/storage/framework/views/**'],
+        },
+    },
+});
+```
+
+## ¿Qué hemos cambiado?
+
+Antes:
+
+```text
+resources/css/app.css
+resources/js/app.js
+```
+
+Ahora:
+
+```text
+resources/scss/app.scss
+resources/ts/app.ts
+```
+
+Toda la configuración queda completamente tipada.
+
+---
+
+# Paso 7.8 · Estructura del frontend
+
+```text
+src/
+├── resources/
+│   ├── scss/
+│   │   └── app.scss
+│   │
+│   └── ts/
+│       └── app.ts
+│
+├── tsconfig.json
+├── vite.config.ts
+├── package.json
+└── package-lock.json
+```
+
+---
+
+# Levantar todo el proyecto
+
+```bash
+docker compose up --build -d
+```
+
+Comprobar servicios:
+
+```bash
+docker compose ps
+```
+
+Resultado esperado:
+
+```text
+kasa_sofa_app
+kasa_sofa_nginx
+kasa_sofa_mysql
+kasa_sofa_node
+```
+
+---
+
+# Comandos oficiales del proyecto
+
+## Laravel
+
+```bash
+docker compose exec app php artisan migrate
+
+docker compose exec app php artisan optimize
+
+docker compose exec app composer install
+```
+
+## Node
+
+```bash
+docker compose exec node npm install
+
+docker compose exec node npm run dev -- --host
+
+docker compose exec node npx tsc --init
+```
+
+---
+
+# Estado final de la dockerización
+
+- [x] Laravel 13
+- [x] PHP 8.4 FPM
+- [x] Composer
+- [x] Nginx
+- [x] MySQL 8.4 LTS
+- [x] Node 22
+- [x] npm
+- [x] Vite
+- [x] TypeScript
+- [x] SCSS
+
+## Arquitectura final
+
+```text
+Ubuntu
+├── Docker
+├── Git
+└── VS Code
+
+Docker Compose
+│
+├── app
+│   ├── Laravel 13
+│   ├── PHP 8.4
+│   └── Composer
+│
+├── nginx
+│   └── Servidor Web
+│
+├── db
+│   └── MySQL 8.4
+│
+└── node
+    ├── Node 22
+    ├── Vite
+    ├── TypeScript
+    └── SCSS
+
+Navegador
+│
+├── http://localhost:8086   → Laravel
+└── http://localhost:5173   → Vite (desarrollo)
+```
+
+**Resultado:** Todo el entorno de desarrollo queda completamente dockerizado. Ubuntu únicamente edita el código; PHP, Composer, MySQL, Node, Vite y TypeScript viven dentro de sus respectivos contenedores.
