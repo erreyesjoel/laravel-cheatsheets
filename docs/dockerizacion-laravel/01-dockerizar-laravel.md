@@ -702,3 +702,380 @@ http://localhost:8086
 ```
 
 **Resultado:** Laravel ya funciona con una arquitectura muy similar a producción, donde Nginx actúa como servidor web y PHP-FPM ejecuta la aplicación.
+
+
+## Paso 6 · Añadir MySQL 8.4 (LTS)
+
+Hasta ahora Laravel funcionaba con PHP y Nginx, pero seguía utilizando SQLite.
+
+En esta fase añadimos **MySQL 8.4 LTS** como un nuevo servicio de Docker Compose y conectamos Laravel mediante PDO.
+
+---
+
+## Nueva arquitectura
+
+```text
+Navegador
+      │
+      ▼
+localhost:8086
+      │
+      ▼
+Nginx
+      │
+      ▼
+Laravel 13 (PHP-FPM)
+      │
+      ▼
+MySQL 8.4
+```
+
+Ahora cada componente tiene una responsabilidad:
+
+| Servicio | Función |
+|----------|---------|
+| app | Laravel + PHP 8.4 |
+| nginx | Servidor web |
+| db | Base de datos MySQL |
+
+---
+
+# Paso 6.1 · Servicio MySQL
+
+Archivo:
+
+`docker-compose.yml`
+
+Añadimos un tercer servicio llamado **db**.
+
+```yaml
+services:
+
+  # =====================================================
+  # SERVICIO PRINCIPAL · LARAVEL 13 + PHP 8.4
+  # =====================================================
+  app:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+
+    container_name: kasa_sofa_app
+    working_dir: /var/www
+
+    volumes:
+      - ./src:/var/www
+
+
+  # =====================================================
+  # SERVIDOR WEB · NGINX
+  # =====================================================
+  nginx:
+    image: nginx:stable-alpine
+
+    container_name: kasa_sofa_nginx
+
+    ports:
+      - "8086:80"
+
+    volumes:
+      - ./src:/var/www
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+
+    depends_on:
+      - app
+
+
+  # =====================================================
+  # BASE DE DATOS · MYSQL 8.4 LTS
+  # =====================================================
+  db:
+
+    # Imagen oficial de MySQL 8.4
+    image: mysql:8.4
+
+    # Nombre del contenedor
+    container_name: kasa_sofa_mysql
+
+    # Reinicio automático
+    restart: unless-stopped
+
+    # Credenciales de DESARROLLO
+    environment:
+      MYSQL_DATABASE: kasa_sofa
+      MYSQL_USER: developer
+      MYSQL_PASSWORD: ChangeMe123
+      MYSQL_ROOT_PASSWORD: RootChangeMe456
+
+    # Persistencia de datos
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+    # Puerto del PC : Puerto del contenedor
+    ports:
+      - "3311:3306"
+
+    # Puerto interno visible para Docker
+    expose:
+      - "3306"
+
+
+# =====================================================
+# VOLÚMENES PERSISTENTES
+# =====================================================
+volumes:
+  mysql_data:
+```
+
+---
+
+# ¿Qué hace cada parte?
+
+## image
+
+```yaml
+image: mysql:8.4
+```
+
+Descarga la imagen oficial de MySQL 8.4 LTS.
+
+No necesitamos crear un Dockerfile propio para MySQL.
+
+---
+
+## environment
+
+```yaml
+environment:
+  MYSQL_DATABASE: kasa_sofa
+  MYSQL_USER: developer
+  MYSQL_PASSWORD: ChangeMe123
+  MYSQL_ROOT_PASSWORD: RootChangeMe456
+```
+
+Cuando el contenedor arranca por primera vez, MySQL crea automáticamente:
+
+- La base de datos `kasa_sofa`
+- El usuario `developer`
+- Su contraseña
+- El usuario administrador `root`
+
+> Estas credenciales son únicamente de ejemplo para desarrollo.
+
+---
+
+## volumes
+
+```yaml
+volumes:
+  - mysql_data:/var/lib/mysql
+```
+
+Aquí MySQL guarda físicamente todos los datos.
+
+Sin volumen:
+
+```text
+Eliminar contenedor
+        │
+        ▼
+❌ Base de datos perdida
+```
+
+Con volumen:
+
+```text
+Eliminar contenedor
+        │
+        ▼
+Volumen Docker
+        │
+        ▼
+✅ Datos conservados
+```
+
+Aunque reconstruyas el contenedor, la información seguirá existiendo.
+
+---
+
+## ports
+
+```yaml
+ports:
+  - "3311:3306"
+```
+
+Significa:
+
+| Equipo | Puerto |
+|---------|--------|
+| Ubuntu | 3311 |
+| MySQL | 3306 |
+
+**3311** solo sirve para conectarte desde tu ordenador (DBeaver, TablePlus o terminal).
+
+Laravel **NO utiliza ese puerto**.
+
+---
+
+## expose
+
+```yaml
+expose:
+  - "3306"
+```
+
+Hace visible el puerto **3306** únicamente para otros contenedores de la misma red Docker.
+
+Por eso Laravel puede conectarse utilizando el nombre del servicio `db`.
+
+---
+
+# Paso 6.2 · Configurar Laravel
+
+Archivo:
+
+`src/.env`
+
+Sustituimos SQLite por MySQL.
+
+```env
+# =====================================================
+# BASE DE DATOS · MYSQL
+# =====================================================
+
+DB_CONNECTION=mysql
+
+# Nombre del servicio Docker
+DB_HOST=db
+
+# Puerto interno del contenedor MySQL
+DB_PORT=3306
+
+DB_DATABASE=kasa_sofa
+DB_USERNAME=developer
+DB_PASSWORD=ChangeMe123
+```
+
+## ¿Por qué DB_HOST=db?
+
+Porque Docker Compose crea un DNS interno automáticamente.
+
+En lugar de escribir:
+
+```env
+DB_HOST=localhost
+```
+
+Laravel utilizará:
+
+```text
+app ─────────▶ db
+```
+
+`db` es simplemente el nombre del servicio definido en `docker-compose.yml`.
+
+---
+
+# Paso 6.3 · Levantar los servicios
+
+Reconstruimos todo:
+
+```bash
+docker compose up --build -d
+```
+
+Comprobamos los contenedores:
+
+```bash
+docker compose ps
+```
+
+Resultado esperado:
+
+```text
+NAME                 STATUS
+
+kasa_sofa_app        Up
+kasa_sofa_nginx      Up
+kasa_sofa_mysql      Up
+```
+
+---
+
+# Paso 6.4 · Ejecutar migraciones
+
+Entramos directamente desde Docker:
+
+```bash
+docker compose exec app php artisan migrate
+```
+
+Laravel creará automáticamente las tablas iniciales:
+
+```text
+create_users_table
+create_cache_table
+create_jobs_table
+```
+
+Si aparecen como **DONE**, significa que Laravel ya está escribiendo en MySQL.
+
+---
+
+# Verificación completa
+
+## Optimizar Laravel
+
+```bash
+docker compose exec app php artisan optimize
+```
+
+Debe generar correctamente:
+
+- Config cache
+- Events
+- Routes
+- Views
+
+---
+
+## Ejecutar migraciones
+
+```bash
+docker compose exec app php artisan migrate
+```
+
+Debe finalizar sin errores.
+
+---
+
+# ¿Por qué ya no usamos SQLite?
+
+SQLite era útil para arrancar Laravel rápidamente, pero una tienda necesita una base de datos real.
+
+MySQL nos permitirá almacenar:
+
+- Productos
+- Catálogos
+- Pedidos
+- Clientes
+- Usuarios administradores
+- Métodos de pago
+
+Además, será exactamente la misma tecnología que utilizaremos en producción.
+
+---
+
+# Estado actual del proyecto
+
+- [x] Laravel 13
+- [x] PHP 8.4 FPM
+- [x] Composer
+- [x] Nginx
+- [x] ENTRYPOINT y permisos automáticos
+- [x] MySQL 8.4 LTS
+- [ ] Node 22
+- [ ] TypeScript
+- [ ] Vite
+- [ ] Panel de administración
+```
